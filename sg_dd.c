@@ -2809,7 +2809,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 	{
 		int byte_to_write = 0;
 		int j;
-		unsigned char chars[3];
+		unsigned char chars[3]={0};
 		unsigned int n;
 
 		stats->passwiping_ticks = 0;
