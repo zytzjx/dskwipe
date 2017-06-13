@@ -2,28 +2,18 @@
 
 this is using sg3_lib.
 
-### What is this repository for? ###
+### How To Compile sg3_lib ###
 
-* Quick summary
-* Version
-* [Learn Markdown](https://bitbucket.org/tutorials/markdowndemo)
+* Get from [SG3_LIB](http://sg.danny.cz/sg/p/sg3_utils-1.42.tar.xz)
+* Version(1.4.2)
 
 ### How do I get set up? ###
 
-* Summary of set up
-* Configuration
-* Dependencies
-* Database configuration
-* How to run tests
-* Deployment instructions
+* ./configure --prefix=/usr --disable-static &&
+make
+* sudo make install
 
-### Contribution guidelines ###
+### library ###
 
-* Writing tests
-* Code review
-* Other guidelines
+* Installed Library:libsgutils2.so 
 
-### Who do I talk to? ###
-
-* Repo owner or admin
-* Other community or team contact
