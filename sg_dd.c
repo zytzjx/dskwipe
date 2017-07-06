@@ -65,7 +65,7 @@
 
 #include "common.h"
 
-static const char * version_str = "5.86 20151219";
+static const char * version_str = "5.86 20170619";
 
 #define ME "dskwipe: "
 
@@ -149,7 +149,7 @@ static int verbose = 0;
 static int start_tm_valid = 0;
 static struct timeval start_tm;
 static struct timeval start_record;
-static int blk_sz = 0;
+static int blk_sz = 512;
 static int max_uas = MAX_UNIT_ATTENTIONS;
 static int max_aborted = MAX_ABORTED_CMDS;
 static int coe_limit = 0;
@@ -2737,12 +2737,14 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 
 	stats->device_name = device_name;
 
+	stats->bytes_per_sector = DEF_BLOCK_SIZE;
+
 	int bpt = DEF_BLOCKS_PER_TRANSFER;
 	int out_type = FT_OTHER;
 	int outfd, retries_tmp;
     int64_t out_num_sect = -1;
     int out_sect_sz;
-    int res;
+    int res = 0;
 
 	outfd = open_of(device_name, opt.start, bpt, &oflag, &out_type, verbose);
 	if (outfd < -1)
@@ -2773,7 +2775,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
         }
     }//MUST is FT_SG support. other not support
 
-
+    pr2serr("Start, out_num_sect=%" PRId64 ",block size=%d\n", out_num_sect,out_sect_sz);
 	if (opt.end > out_num_sect) {
 		pr2serr("Ending sector must be less than or equal to %" PRId64 " for %s", out_num_sect, device_name);
 		exit(-2);
@@ -2969,7 +2971,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 		unsigned long sectors_to_process = opt.sectors;
 
 		int buf_sz, dio_tmp, first, blocks_per;
-		int ret;
+//		int ret;
 		int64_t seek = opt.start;
 		int dio_incomplete = 0;
 		for (int64_t sector = opt.start; sector <= opt.end; sector += opt.sectors)
@@ -3002,14 +3004,14 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 				retries_tmp = oflag.retries;
 				first = 1;
 				while (1) {
-					ret = sg_write(outfd, sector_data, sectors_to_process, seek, blk_sz,
+					res = sg_write(outfd, sector_data, sectors_to_process, seek, blk_sz,
 								   &oflag, &dio_tmp);
-					if (0 == ret)
+					if (0 == res)
 						break;
-					if ((SG_LIB_CAT_NOT_READY == ret) ||
-						(SG_LIB_SYNTAX_ERROR == ret))
+					if ((SG_LIB_CAT_NOT_READY == res) ||
+						(SG_LIB_SYNTAX_ERROR == res))
 						break;
-					else if ((-2 == ret) && first) {
+					else if ((-2 == res) && first) {
 						/* ENOMEM: find what's available and try that */
 						if (ioctl(outfd, SG_GET_RESERVED_SIZE, &buf_sz) < 0) {
 							perror("RESERVED_SIZE ioctls failed");
@@ -3024,21 +3026,21 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 									(int)sectors_to_process);
 						} else
 							break;
-					} else if ((SG_LIB_CAT_UNIT_ATTENTION == ret) && first) {
+					} else if ((SG_LIB_CAT_UNIT_ATTENTION == res) && first) {
 						if (--max_uas > 0)
 							pr2serr("Unit attention, continuing (w)\n");
 						else {
 							pr2serr("Unit attention, too many (w)\n");
 							break;
 						}
-					} else if ((SG_LIB_CAT_ABORTED_COMMAND == ret) && first) {
+					} else if ((SG_LIB_CAT_ABORTED_COMMAND == res) && first) {
 						if (--max_aborted > 0)
 							pr2serr("Aborted command, continuing (w)\n");
 						else {
 							pr2serr("Aborted command, too many (w)\n");
 							break;
 						}
-					} else if (ret < 0)
+					} else if (res < 0)
 						break;
 					else if (retries_tmp > 0) {
 						pr2serr(">>> retrying a sgio write, lba=0x%" PRIx64 "\n",
@@ -3051,9 +3053,9 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 						break;
 					first = 0;
 				}
-				if (0 != ret) {
+				if (0 != res) {
 					pr2serr("sg_write failed,%s seek=%" PRId64 "\n",
-							((-2 == ret) ? " try reducing bpt," : ""), seek);
+							((-2 == res) ? " try reducing bpt," : ""), seek);
 					break;
 				} else {
 					out_full += sectors_to_process;
@@ -3077,8 +3079,8 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 	        	print_stats(pass - nCheckCount, s_byte, sector, stats, opt.passes - CheckSumPasses);
 	        	//print_stats(pass, s_byte, sector, stats, opt.passes);
 	        }
-
 		}
+		if(res < 0) break;
 		print_stats(pass - nCheckCount, s_byte, opt.end, stats, opt.passes - CheckSumPasses);
 		//print_stats(pass, s_byte, opt.end, stats, opt.passes);
 	}
@@ -3096,6 +3098,7 @@ main(int argc, char * argv[])
 	opterr = 0;
 	int option_index = 0;
 	optind = 1;
+	int ret = 0;
 
 	while (true) {
 		int c = getopt_long(argc, argv, short_options, long_options, &option_index);
@@ -3341,7 +3344,7 @@ main(int argc, char * argv[])
 
 
 	for (i = 0; i < devices; ++i) {
-		wipe_device(device[i], bytes, byte, &stats);
+		ret = wipe_device(device[i], bytes, byte, &stats);
 	}
 
 	time ( &rawtime );
@@ -3349,5 +3352,5 @@ main(int argc, char * argv[])
 
 	printf("\end Task local time and date: %s", asctime (timeinfo) );
 
-	return 0;
+	return ret;
 }
