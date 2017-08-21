@@ -68,7 +68,7 @@
 #define ME "dskwipe: "
 
 #define APPNAME			"dskWipe"
-#define APPVERSION		"1.0.0.1"
+#define APPVERSION		"1.0.0.3"
 #define APPCOPYRIGHT	"CopyRight(c) 2017-2027."
 
 static char *progname = APPNAME;
@@ -157,7 +157,7 @@ static int max_aborted = MAX_ABORTED_CMDS;
 // 1234 123456 0xff 100.000% 100.000% 00:00:00 00:00:00 00:00:00 00:00:00 12345.67  //consume
 
 #ifdef DEBUG
-#define FORMAT_STRING "%4d %6d %4s %7.3f%% %7.3f%%%9s%9s %8s %8s%9.2f%9.2f\r"
+#define FORMAT_STRING "%4d %6d %4s %7.3f%% %7.3f%%%9s%9s %8s %8s%9.2f%9.2f\n"
 #else
 #define FORMAT_STRING "%4d %6d %4s %7.3f%% %7.3f%%%9s%9s %8s %8s%9.2f%9.2f\r"
 #endif
@@ -1167,7 +1167,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 
 	int bpt = DEF_BLOCKS_PER_TRANSFER;
 	int out_type = FT_OTHER;
-	int outfd, retries_tmp=3;
+	int outfd, retries_tmp=5;
     int64_t out_num_sect = -1;
     int out_sect_sz;
     int res = 0;
@@ -1402,10 +1402,6 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 		int dio_incomplete = 0;
 		retries_tmp = opt.nretries;
 
-		if(seek>0){
-
-		}
-
 		for (int64_t sector = opt.start; sector <= opt.end; sector += opt.sectors)
 		{
 			if (sector + sectors_to_process > opt.end)
@@ -1438,6 +1434,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 					if (0 == res)
 						break;
 					if ((SG_LIB_CAT_NOT_READY == res) || (SG_LIB_SYNTAX_ERROR == res)){
+						pr2serr("SG_LIB_CAT_NOT_READY  failed %d\n", res);
 						break;
 					} else if ((-2 == res) && first) {
 						/* ENOMEM: find what's available and try that */
@@ -1452,24 +1449,37 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 							sectors_to_process = blocks_per;
 							pr2serr("Reducing write to %d blocks per loop\n",
 									(int)sectors_to_process);
+							res = 0;
 						} else
 							break;
 					} else if ((SG_LIB_CAT_UNIT_ATTENTION == res) && first) {
 						if (--max_uas > 0)
+						{
 							pr2serr("Unit attention, continuing (w)\n");
+							sleep(4);
+							res = 0;
+							break;
+						}
 						else {
 							pr2serr("Unit attention, too many (w)\n");
 							break;
 						}
 					} else if ((SG_LIB_CAT_ABORTED_COMMAND == res) && first) {
 						if (--max_aborted > 0)
+						{
 							pr2serr("Aborted command, continuing (w)\n");
+							res = 0;
+						}
 						else {
 							pr2serr("Aborted command, too many (w)\n");
 							break;
 						}
-					} else if (res < 0)
+					} else //if (res < 0)
+					{
+						pr2serr("other  failed %d\n", res);
 						break;
+
+					}
 					/*else if (retries_tmp > 0) {
 						pr2serr(">>> retrying a sgio write, lba=0x%" PRIx64 "\n",	seek);
 						--retries_tmp;
@@ -1479,19 +1489,22 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 							--unrecovered_errs;
 
 						if(fcntl(outfd,F_GETFD) == -1) break;
-					}*/ else
-						break;
+					}*/ //else
+						//break;
 					first = 0;
 				}
 				if (0 != res) {
 					pr2serr("sg_write failed errorcode=%d,%s seek=%" PRId64 "\n",
 							res, ((-2 == res) ? " try reducing bpt," : ""), seek);
-					if((res == SG_LIB_CAT_TIMEOUT ||res == SG_LIB_CAT_OTHER) && retries_tmp-- > 0)//Host_status=0x0b [DID_SOFT_ERROR]
+					retries_tmp--;
+					if((res == SG_LIB_CAT_TIMEOUT ||res == SG_LIB_CAT_OTHER) &&  retries_tmp > 0)//Host_status=0x0b [DID_SOFT_ERROR]
 					{
+
 						bRetryerror = true;
 						int Retrycount = 10;
-						while (lseek64(outfd, seek * blk_sz, SEEK_SET) < 0) {
-							pr2serr("file seek byte =%" PRId64 " failed.\n", seek * blk_sz);
+						sleep(2);
+						while (ioctl(outfd, SG_GET_RESERVED_SIZE, &buf_sz) < 0) {
+							pr2serr("SG_GET_RESERVED_SIZE  =%d failed.\n", buf_sz);
 							sleep(1);
 							if (Retrycount-- == 0)
 								break;
@@ -1503,7 +1516,6 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 					}
 					else
 						bRetryerror = false;
-					break;
 				} else {
 					out_full += sectors_to_process;
 					if (oflag.dio && (0 == dio_tmp))
@@ -1549,6 +1561,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 int
 main(int argc, char * argv[])
 {
+	version();
 	progname = basename(argv[0]);
 
 	opterr = 0;
