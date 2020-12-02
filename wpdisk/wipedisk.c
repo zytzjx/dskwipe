@@ -65,12 +65,10 @@
 
 #include "common.h"
 
-static const char * version_str = "5.87 20201124";
-
 #define ME "dskwipe: "
 
-#define APPNAME			"dskWipe"
-#define APPVERSION		"1.0.0.3"
+#define APPNAME			"wipedisk"
+#define APPVERSION		"1.0.0.0"
 #define APPCOPYRIGHT	"CopyRight(c) 2017-2027."
 
 static char *progname = APPNAME;
@@ -716,7 +714,7 @@ sg_write(int sg_fd, unsigned char * buff, int blocks, int64_t to_block,
     io_hdr.sbp = senseBuff;
     io_hdr.timeout = DEF_TIMEOUT;
     io_hdr.pack_id = (int)to_block;
-    if (diop && *diop)
+    //if (diop && *diop)
         io_hdr.flags |= SG_FLAG_DIRECT_IO;
 
     if (verbose > 2) {
@@ -834,12 +832,6 @@ open_of(const char * outf, int64_t seek, int bpt, struct flags_t * ofp,
 
     if (FT_SG & *out_typep) {
         flags = O_RDWR | O_NONBLOCK;
-//        if (ofp->direct)
-//            flags |= O_DIRECT;
-//        if (ofp->excl)
-//            flags |= O_EXCL;
-//        if (ofp->dsync)
-//            flags |= O_SYNC;
         if ((outfd = open(outf, flags)) < 0) {
             snprintf(ebuff, EBUFF_SZ,
                      ME "could not open %s for sg writing", outf);
@@ -868,8 +860,33 @@ open_of(const char * outf, int64_t seek, int bpt, struct flags_t * ofp,
             }
         }
     }
-    else
-    	outfd = -1;
+    else {
+      outfd = open (outf, O_WRONLY|O_SYNC);
+	  if (outfd < 0
+		  && (errno == EACCES)
+		  && chmod (outf, S_IWUSR) == 0)
+		  outfd = open (outf, O_WRONLY);
+	  if(outfd < 0){
+          snprintf(ebuff, EBUFF_SZ,
+                   ME "could not open %s for  writing", outf);
+          perror(ebuff);
+          goto file_err;
+	  }
+	  if (seek > 0) {
+		  __off64_t offset = seek;
+
+		  offset *= blk_sz;       /* could exceed 32 bits here! */
+		  if (lseek64(outfd, offset, SEEK_SET) < 0) {
+			  snprintf(ebuff, EBUFF_SZ,
+				  ME "couldn't seek to required position on %s", outf);
+			  perror(ebuff);
+			  goto file_err;
+		  }
+		  if (verbose)
+			  pr2serr("   >> seek: lseek64 SEEK_SET, byte offset=0x%" PRIx64
+					  "\n", (uint64_t)offset);
+	  }
+    }
     if (ofp->flock) {
         res = flock(outfd, LOCK_EX | LOCK_NB);
         if (res < 0) {
@@ -987,6 +1004,50 @@ static char *seconds_to_hhmmss(uint seconds, char *rv, int bufsiz) {
 	return rv;
 }
 
+/* Return of 0 -> success, -1 -> failure. BLKGETSIZE64, BLKGETSIZE and */
+/* BLKSSZGET macros problematic (from <linux/fs.h> or <sys/mount.h>). */
+static int
+read_blkdev_capacity(int sg_fd, int64_t * num_sect, int * sect_sz)
+{
+#ifdef BLKSSZGET
+    if ((ioctl(sg_fd, BLKSSZGET, sect_sz) < 0) && (*sect_sz > 0)) {
+        perror("BLKSSZGET ioctl error");
+        return -1;
+    } else {
+ #ifdef BLKGETSIZE64
+        uint64_t ull;
+
+        if (ioctl(sg_fd, BLKGETSIZE64, &ull) < 0) {
+
+            perror("BLKGETSIZE64 ioctl error");
+            return -1;
+        }
+        *num_sect = ((int64_t)ull / (int64_t)*sect_sz);
+        if (verbose)
+            pr2serr("      [bgs64] number of blocks=%" PRId64 " [0x%" PRIx64
+                    "], block size=%d\n", *num_sect, *num_sect, *sect_sz);
+ #else
+        unsigned long ul;
+
+        if (ioctl(sg_fd, BLKGETSIZE, &ul) < 0) {
+            perror("BLKGETSIZE ioctl error");
+            return -1;
+        }
+        *num_sect = (int64_t)ul;
+        if (verbose)
+            pr2serr("      [bgs] number of blocks=%" PRId64 " [0x%" PRIx64
+                    "],  block size=%d\n", *num_sect, *num_sect, *sect_sz);
+ #endif
+    }
+    return 0;
+#else
+    if (verbose)
+        pr2serr("      BLKSSZGET+BLKGETSIZE ioctl not available\n");
+    *num_sect = 0;
+    *sect_sz = 0;
+    return -1;
+#endif
+}
 
 static void print_stats(unsigned int pass, char *s_byte, int64_t sector, t_stats *stats, int passescnt)
 {
@@ -1072,7 +1133,7 @@ static void print_stats(unsigned int pass, char *s_byte, int64_t sector, t_stats
 	char finish_time[255] = { 0 };
 	snprintf(finish_time, sizeof(finish_time), "%08" PRId64, tems);
 
-	char buf[1024];
+	char buf[255];
 	snprintf(buf, sizeof(buf), "%.3f%% - %s - %s - %s", all_pct, remaining_time, stats->device_name, progname);
 
 	printf(FORMAT_STRING,
@@ -1202,6 +1263,13 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
             stats->bytes_per_sector = blk_sz;
         }
     }//MUST is FT_SG support. other not support
+    else{
+    	if (0 != read_blkdev_capacity(outfd, &out_num_sect,
+    	                                          &out_sect_sz)) {
+				pr2serr("Unable to read block capacity on %s\n", device_name);
+				out_num_sect = -1;
+			}
+    }
 
     pr2serr("Start, out_num_sect=%" PRId64 ",block size=%d\n", out_num_sect,out_sect_sz);
 	if (opt.end > out_num_sect) {
@@ -1238,6 +1306,20 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 
 	for (unsigned int pass = 1; pass <= opt.passes; ++pass)
 	{
+		int64_t seek = opt.start;
+
+		if (seek > 0) {
+			__off64_t offset = seek;
+
+			offset *= blk_sz;       /* could exceed 32 bits here! */
+			if (lseek64(outfd, offset, SEEK_SET) < 0) {
+				perror(ME "couldn't seek to required position ");
+			}
+			if (verbose)
+				pr2serr("   >> seek: lseek64 SEEK_SET, byte offset=0x%" PRIx64
+						"\n", (uint64_t)offset);
+		}
+
 		int byte_to_write = 0;
 		int j;
 		unsigned char chars[3]={0};
@@ -1400,7 +1482,6 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 		unsigned long sectors_to_process = opt.sectors;
 
 		int buf_sz, dio_tmp, first, blocks_per;
-		int64_t seek = opt.start;
 		int dio_incomplete = 0;
 		retries_tmp = opt.nretries;
 
@@ -1433,8 +1514,10 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 				while (1) {
 					res = sg_write(outfd, sector_data, sectors_to_process, seek, blk_sz,
 								   &oflag, &dio_tmp);
-					if (0 == res)
+					if (0 == res){
+						retries_tmp = opt.nretries;
 						break;
+					}
 					if ((SG_LIB_CAT_NOT_READY == res) || (SG_LIB_SYNTAX_ERROR == res)){
 						pr2serr("SG_LIB_CAT_NOT_READY  failed %d\n", res);
 						break;
@@ -1498,7 +1581,7 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 				if (0 != res) {
 					pr2serr("sg_write failed errorcode=%d,%s seek=%" PRId64 "\n",
 							res, ((-2 == res) ? " try reducing bpt," : ""), seek);
-					retries_tmp--;
+					if (retries_tmp--<0)break;
 					if((res == SG_LIB_CAT_TIMEOUT ||res == SG_LIB_CAT_OTHER) &&  retries_tmp > 0)//Host_status=0x0b [DID_SOFT_ERROR]
 					{
 
@@ -1528,6 +1611,19 @@ wipe_device(char *device_name, int bytes, int *byte, t_stats *stats)
 			{
 				out_full += sectors_to_process; /* act as if written out without error */
 			}
+			else
+			{
+				 ssize_t nlen=0;
+				 while (((nlen = write(outfd, sector_data, sectors_to_process * blk_sz)) < 0) &&
+				                   ((EINTR == errno) || (EAGAIN == errno)))
+				                ;
+
+				 if(nlen < sectors_to_process * blk_sz && retries_tmp-- < 0) res = 5;
+
+				 if(nlen > 0) res = 0;
+				 //fsync(outfd);
+			}
+
 
 	        seek += sectors_to_process;
 
@@ -1756,6 +1852,7 @@ main(int argc, char * argv[])
 
 	if (bytes == 0) {
 		bytes = 1;
+		if(byte!=NULL)free(byte);
 		byte = (int *) malloc(sizeof(int) * bytes);
 		byte[0] = 0;
 	}
@@ -1819,12 +1916,17 @@ main(int argc, char * argv[])
 
 	for (i = 0; i < devices; ++i) {
 		ret = wipe_device(device[i], bytes, byte, &stats);
+		if(device[i]!=NULL) free(device[i]);
 	}
+	//if(*device!=NULL) free(*device);
+
+	if(byte!=NULL) free(byte);
 
 	time ( &rawtime );
 	timeinfo = localtime ( &rawtime );
 
-	printf("\end Task local time and date: %s", asctime (timeinfo) );
+	printf("end Task local time and date: %s\n", asctime (timeinfo) );
 
+	printf("\nWipeExitCode=%d\n",ret);
 	return ret;
 }
