@@ -4,8 +4,8 @@ this is using sg3_lib.
 
 ### How To Compile sg3_lib ###
 
-* Get from [SG3_LIB](http://sg.danny.cz/sg/p/sg3_utils-1.42.tar.xz)
-* Version(1.4.2)
+* Get from [SG3_LIB](http://sg.danny.cz/sg/p/sg3_utils-1.45.tar.xz)
+* Version(1.4.5)
 
 ### How do I get set up? ###
 
